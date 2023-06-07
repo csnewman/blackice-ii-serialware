@@ -1,0 +1,6 @@
+.idea
+build
+CMakeFiles
+Makefile
+cmake_install.cmake
+cmake-build-debug
