@@ -1,4 +1,4 @@
-module manager
+module github.com/csnewman/blackice-ii-serialware/client
 
 go 1.20
 

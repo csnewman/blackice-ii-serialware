@@ -13,6 +13,7 @@
 #define status_led_low() HAL_GPIO_WritePin(GPIOC, LED5_Pin, GPIO_PIN_RESET)
 #define status_led_toggle() HAL_GPIO_TogglePin(GPIOC, LED5_Pin)
 
+
 extern UART_HandleTypeDef huart1;
 extern SPI_HandleTypeDef hspi3;
 
@@ -176,8 +177,19 @@ static uint8_t ice40_configdone(void) {
 }
 
 
+void delayUS(uint32_t us) {
+    volatile uint32_t counter = 7 * us;
+    while (counter--);
+}
+
 _Noreturn void run(void) {
     select_leds();
+
+    if (gpio_ishigh(ICE40_CDONE)) {
+        status_led_high();
+    } else {
+        status_led_low();
+    }
 
     uint8_t count = 0;
 
@@ -195,7 +207,7 @@ _Noreturn void run(void) {
                 break;
 
             case 10:
-                status_led_high();
+                status_led_low();
                 disable_mux_out();
                 spi_reattach();
 
@@ -229,11 +241,100 @@ _Noreturn void run(void) {
 
                 spi_detach();
                 enable_mux_out();
-                status_led_low();
+                status_led_high();
 
                 out_len = 1;
                 out_buf[0] = res;
                 writePacket(id);
+                break;
+
+            case 20: // Read
+                int timeout = in_buf[0];
+                while (!gpio_ishigh(QRTS)) {
+                    if (timeout == 0)
+                        break;
+
+                    timeout -= 1;
+                    msec_delay(1);
+                }
+
+                if (!gpio_ishigh(QRTS)) {
+                    out_len = 1;
+                    out_buf[0] = 1;
+                    writePacket(id);
+
+                    break;
+                }
+
+                int len = in_buf[1];
+
+                gpio_low(QDIR);
+                delayUS(QSLEEP);
+
+                for (int p = 0; p < len; ++p) {
+                    while (!gpio_ishigh(QRTS)) {
+                        delayUS(QSLEEP);
+                    }
+
+                    uint8_t read = 0;
+                    for (int i = 0; i < 8; ++i) {
+                        read <<= 1;
+
+                        gpio_high(QCLK);
+                        delayUS(QSLEEP);
+
+                        if (gpio_ishigh(QOUT)) {
+                            read |= 1;
+                        }
+
+                        gpio_low(QCLK);
+                        delayUS(QSLEEP);
+                    }
+
+                    out_buf[1 + p] = read;
+                }
+
+                out_len = 1 + len;
+                out_buf[0] = 2;
+                writePacket(id);
+
+                break;
+
+            case 21: // Write
+                gpio_high(QDIR);
+                delayUS(QSLEEP);
+
+                for (int p = 0; p < in_len; ++p) {
+                    while (!gpio_ishigh(QCTS)) {
+                        delayUS(QSLEEP);
+                    }
+
+                    uint8_t data = in_buf[p];
+                    uint8_t cur = 0b10000000;
+
+                    for (int i = 0; i < 8; ++i) {
+                        if ((cur & data) != 0) {
+                            gpio_high(QIN);
+                        } else {
+                            gpio_low(QIN);
+                        }
+
+                        delayUS(QSLEEP);
+
+                        gpio_high(QCLK);
+                        delayUS(QSLEEP);
+
+                        gpio_low(QCLK);
+                        delayUS(QSLEEP);
+
+                        cur >>= 1;
+                    }
+                }
+
+                out_len = 1;
+                out_buf[0] = 2;
+                writePacket(id);
+
                 break;
 
             default:
